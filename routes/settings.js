@@ -7,6 +7,7 @@ const mime = require('mime-types')
 var db = require('../utils/handlers/user');
 var formParser = require('../utils/form-parser.js');
 const fs = require('file-system');
+const {cloudinary, isSetup} = require('../config/cloudinary.js');
 
 var image_types = ["png","jpeg","gif"];
 
@@ -47,23 +48,13 @@ router.get('/post/:action/:query', function(req, res, next) {
 			db.findOne({username:req.session.user}, (err, u) => {
 				let id = req.params.query
 				console.log(u);
-				if(u.posts[u.posts.indexOf(u.posts.find(x => x._id == id))].static_url)
-        try {
-          fs.unlinkSync('./public' + u.posts[u.posts.indexOf(u.posts.find(x => x._id == id))].static_url);
-        } catch (e) {
-          console.log(e);
-        }
-        try {
-          u.posts.splice(u.posts.indexOf(u.posts.find(x => x._id == id)), 1);
+				if(u.posts[u.posts.indexOf(u.posts.find(x => x._id == id))].static_url) fs.unlinkSync('./public' + u.posts[u.posts.indexOf(u.posts.find(x => x._id == id))].static_url);
+				u.posts.splice(u.posts.indexOf(u.posts.find(x => x._id == id)), 1);
 				u.save(err => {
 					if (err) throw err;
 					console.log('Post deleted');
 					res.redirect('/')
 				})
-      } catch (e) {
-        console.log(e);
-        res.redirect('/')
-      }
 			});
 		}
       break;
@@ -80,34 +71,11 @@ router.get('/upload', function(req, res, next) {
 		})
 
 })
-
-var cloudinary = require('cloudinary');
-
-cloudinary.config({
-  cloud_name: 'nametagio',
-  api_key: '226387842149764',
-  api_secret: 'RK9oPEEeAx7uwc79ttZ0A2rRMLI'
-});
-var multer = require("multer");
-var storage = multer.diskStorage({
-  destination: function(req, file, callback) {
-    callback(null, './public/uploads'); // set the destination
-  },
-  filename: function(req, file, callback) {
-    callback(null, Date.now() + '.jpg'); // set the file name and extension
-  }
-});
-var upload = multer({
-  storage: storage
-});
-
 router.post('/upload', formParser,function(req, res, next) {
 			// Generate a random id
 			var random_id = guid.raw();
       var final_location, type;
-			if(req.files.filetoupload.name) {
-			// Assign static_url path
-
+			if(req.files.filetoupload.name && isSetup) {
       cloudinary.v2.uploader.upload(req.files.filetoupload.path,
         function(error, result) {
           console.log(result, error);
@@ -142,9 +110,45 @@ router.post('/upload', formParser,function(req, res, next) {
       		})
           }
         });
-		} else {
-			final_location = null;
-		}
+		} else if (req.files.filetoupload.name) {
+      // Assign static_url path
+      var oldpath = req.files.filetoupload.path;
+      var newpath = path.join(
+        __dirname,
+        `../public/feeds/${req.session.user}_${random_id}${req.files.filetoupload.name}`
+      );
+      var final_location = `/feeds/${req.session.user}_${random_id}${req.files.filetoupload.name}`;
 
+      console.log(
+        `${oldpath} - OldPath\n ${newpath} - Newpath\n ${final_location} - DiskLocation\n`
+      );
+      // Finally upload the file to disk and save the feed to users profile.
+      var type = mime.lookup(req.files.filetoupload.name).split("/")[1];
+      mv(oldpath, newpath, function(err) {
+        console.log("moving files");
+      });
+      db.findOne({ username: req.session.user }, (err, u) => {
+        console.log(u);
+        u.posts.push({
+          _id: random_id,
+          author: req.session.user,
+          authorID: req.session._id,
+          static_url: final_location,
+          caption: req.body.caption,
+          category: req.body.type,
+          comments: [],
+          likes: [],
+          type: type,
+          createdAt: new Date(),
+          lastEditedAt: new Date()
+        });
+        u.save(err => {
+          if (err) throw err;
+          console.log("Post saved");
+          // Redirect back after the job is done.
+          res.redirect("/");
+        });
+      });
+    }
 })
 module.exports = router;
